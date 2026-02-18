@@ -1,145 +1,359 @@
-# File: polarityapp_connector.py
-#
-# Copyright (c) 2025 Splunk Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software distributed under
-# the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
-# either express or implied. See the License for the specific language governing permissions
-# and limitations under the License.
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+# -----------------------------------------
+# Phantom sample App Connector python file
+# -----------------------------------------
 
+# Phantom App imports
 import phantom.app as phantom
-import requests
 from phantom.action_result import ActionResult
 from phantom.base_connector import BaseConnector
 
-from polarityapp_consts import (
-    POLARITYAPP_CONNECTIVITY_ENDPOINT,
-    POLARITYAPP_ERR_CONNECTIVITY_TEST,
-    POLARITYAPP_SUCC_CONNECTIVITY_TEST,
-)
+import json
+import requests
+from bs4 import BeautifulSoup
+from collections import defaultdict
+
+# from polarityapp_consts import *
+
+
+class RetVal(tuple):
+    def __new__(cls, val1, val2=None):
+        return tuple.__new__(RetVal, (val1, val2))
 
 
 class PolarityappConnector(BaseConnector):
-    """
-    Polarityapp connector class that serves as a starting point for new connectors.
-    """
-
     def __init__(self):
-        super().__init__()
+        super(PolarityappConnector, self).__init__()
+        self._state = None
         self._base_url = None
-        self._api_key = None
-        self._verify = False
 
-    def _make_rest_call(self, endpoint, action_result, headers=None, params=None, data=None, json=None, method="get"):
-        """
-        Helper function to make REST calls for the connector.
-        """
+    def _process_empty_response(self, response, action_result):
+        if response.status_code == 200:
+            return RetVal(phantom.APP_SUCCESS, {})
+
+        return RetVal(
+            action_result.set_status(
+                phantom.APP_ERROR, "Empty response and no information in the header"
+            ),
+            None,
+        )
+
+    def _process_html_response(self, response, action_result):
+        status_code = response.status_code
+
         try:
-            url = f"{self._base_url}{endpoint}"
-            self.debug_print(f"Making REST call to: {url}")
+            soup = BeautifulSoup(response.text, "html.parser")
+            error_text = soup.text
+            split_lines = error_text.split("\n")
+            split_lines = [x.strip() for x in split_lines if x.strip()]
+            error_text = "\n".join(split_lines)
+        except Exception:
+            error_text = "Cannot parse error details"
 
-            request_func = getattr(requests, method.lower())
+        message = "Status Code: {0}. Data from server:\n{1}\n".format(
+            status_code, error_text
+        )
 
-            response = request_func(url, json=json, data=data, headers=headers, params=params, verify=self._verify)
+        message = message.replace("{", "{{").replace("}", "}}")
+        return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
 
-            # Add debug data
-            if hasattr(action_result, "add_debug_data"):
-                action_result.add_debug_data({"r_status_code": response.status_code})
-                action_result.add_debug_data({"r_text": response.text})
-                action_result.add_debug_data({"r_headers": response.headers})
-
-            # Process response
-            if 200 <= response.status_code < 300:
-                try:
-                    if response.text:
-                        return phantom.APP_SUCCESS, response.json()
-                    return phantom.APP_SUCCESS, {}
-                except ValueError:
-                    return phantom.APP_SUCCESS, response.text
-
-            # Error handling
-            error_message = f"Error from server. Status Code: {response.status_code}"
-            if response.text:
-                try:
-                    resp_json = response.json()
-                    error_message = f"Error from server. Status Code: {response.status_code}. Error: {resp_json.get('error', 'Unknown error')}"
-                except ValueError:
-                    error_message = f"Error from server. Status Code: {response.status_code}. Error: {response.text}"
-
-            return action_result.set_status(phantom.APP_ERROR, error_message), None
-
+    def _process_json_response(self, r, action_result):
+        try:
+            resp_json = r.json()
         except Exception as e:
-            return action_result.set_status(phantom.APP_ERROR, f"Error making REST call: {e!s}"), None
+            return RetVal(
+                action_result.set_status(
+                    phantom.APP_ERROR,
+                    "Unable to parse JSON response. Error: {0}".format(str(e)),
+                ),
+                None,
+            )
 
-    def _handle_test_connectivity(self, param):
-        """
-        Validate the asset configuration for connectivity using supplied credentials.
-        """
-        action_result = self.add_action_result(ActionResult(dict(param)))
-        self.save_progress("Connecting to instance...")
+        if 200 <= r.status_code < 399:
+            return RetVal(phantom.APP_SUCCESS, resp_json)
 
-        # Example test connectivity code
-        endpoint = POLARITYAPP_CONNECTIVITY_ENDPOINT
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        message = "Error from server. Status Code: {0} Data from server: {1}".format(
+            r.status_code, r.text.replace("{", "{{").replace("}", "}}")
+        )
 
-        ret_val, _ = self._make_rest_call(endpoint, action_result, headers=headers)
+        return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
 
-        if phantom.is_fail(ret_val):
-            self.save_progress(POLARITYAPP_ERR_CONNECTIVITY_TEST)
-            return action_result.get_status()
+    def _process_response(self, r, action_result):
+        if hasattr(action_result, "add_debug_data"):
+            action_result.add_debug_data({"r_status_code": r.status_code})
+            action_result.add_debug_data({"r_text": r.text})
+            action_result.add_debug_data({"r_headers": r.headers})
 
-        self.save_progress(POLARITYAPP_SUCC_CONNECTIVITY_TEST)
-        return action_result.set_status(phantom.APP_SUCCESS)
+        if "json" in r.headers.get("Content-Type", ""):
+            return self._process_json_response(r, action_result)
 
-    def initialize(self):
-        """
-        Initialize the connector.
-        """
-        self.debug_print("Initializing connector")
+        if "html" in r.headers.get("Content-Type", ""):
+            return self._process_html_response(r, action_result)
+
+        if not r.text:
+            return self._process_empty_response(r, action_result)
+
+        message = "Can't process response from server. Status Code: {0} Data from server: {1}".format(
+            r.status_code, r.text.replace("{", "{{").replace("}", "}}")
+        )
+
+        return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
+
+    def _make_rest_call(self, endpoint, action_result, method="get", **kwargs):
         config = self.get_config()
 
-        # Get configuration parameters
-        self._base_url = config.get("host")
+        resp_json = None
+
+        try:
+            request_func = getattr(requests, method)
+        except AttributeError:
+            return RetVal(
+                action_result.set_status(
+                    phantom.APP_ERROR, "Invalid method: {0}".format(method)
+                ),
+                resp_json,
+            )
+
+        url = self._base_url + endpoint
+
+        try:
+            r = request_func(
+                url,
+                verify=config.get("verify_server_cert", False),
+                **kwargs,
+            )
+        except Exception as e:
+            return RetVal(
+                action_result.set_status(
+                    phantom.APP_ERROR,
+                    "Error Connecting to server. Details: {0}".format(str(e)),
+                ),
+                resp_json,
+            )
+
+        return self._process_response(r, action_result)
+
+    def _clean_json_recursively(self, data):
+        if isinstance(data, dict):
+            new_dict = {}
+            for k, v in data.items():
+                cleaned_v = self._clean_json_recursively(v)  # Use self.
+                if cleaned_v not in (None, "", [], {}):
+                    new_dict[k] = cleaned_v
+            return new_dict
+
+        elif isinstance(data, list):
+            new_list = []
+            for item in data:
+                cleaned_item = self._clean_json_recursively(item)  # Use self.
+                if cleaned_item not in (None, "", [], {}):
+                    new_list.append(cleaned_item)
+            return new_list
+
+        else:
+            return data
+
+    def _handle_test_connectivity(self, param):
+        action_result = self.add_action_result(ActionResult(dict(param)))
+
+        self.save_progress("Connecting to endpoint")
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Accept": "application/vnd.api+json",
+            "Content-Type": "application/vnd.api+json",
+        }
+        ret_val, response = self._make_rest_call(
+            "/api/api-keys/me", action_result, params=None, headers=headers
+        )
+
+        if phantom.is_fail(ret_val):
+            self.save_progress("Test Connectivity Failed.")
+            return action_result.get_status()
+
+        self.save_progress("Test Connectivity Passed")
+        self.save_progress("\n+++++\n{0}".format(response))
+        return action_result.set_status(phantom.APP_SUCCESS)
+
+    def _handle_search(self, param):
+        self.save_progress(
+            "In action handler for: {0}".format(self.get_action_identifier())
+        )
+
+        action_result = self.add_action_result(ActionResult(dict(param)))
+
+        text = param["text"]
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Accept": "application/vnd.api+json",
+            "Content-Type": "application/vnd.api+json",
+        }
+        ret_val, response = self._make_rest_call(
+            "/api/integrations", action_result, params=None, headers=headers
+        )
+        if phantom.is_fail(ret_val):
+            return action_result.get_status()
+            # pass
+
+        ids = list(
+            {
+                opt.get("integration_id")
+                for item in response.get("data", [])
+                for opt in item.get("attributes", {}).get("options", [])
+                if opt.get("integration_id")
+            }
+        )
+
+        parse_payload = {
+            "data": {"type": "parsed-entities", "attributes": {"text": text}}
+        }
+        ret_val, response = self._make_rest_call(
+            "/api/parsed-entities",
+            action_result,
+            method="post",
+            json=parse_payload,
+            headers=headers,
+        )
+        if phantom.is_fail(ret_val):
+            return action_result.get_status()
+
+        etype = defaultdict(list)
+        for e in (
+            response.get("data", {}).get("attributes", {}).get("entities", []) or []
+        ):
+            t, v = e.get("type"), e.get("value")
+            if t and v:
+                etype[t].append(v)
+        etype = dict(etype)
+
+        entities = [
+            {"value": v, "type": t, "channels": []}
+            for t, vals in (etype or {}).items()
+            for v in vals
+        ]
+        lookup_payload = {
+            "data": {
+                "type": "integration-lookups",
+                "attributes": {"entities": entities},
+            }
+        }
+
+        for iid in ids:
+            path = f"/api/integrations/{iid}/lookup"
+            ret_val, response = self._make_rest_call(
+                path, action_result, method="post", json=lookup_payload, headers=headers
+            )
+            if phantom.is_fail(ret_val):
+                self.save_progress(
+                    f"[ERROR] Lookup for integration {iid} failed. Skipping."
+                )
+                continue
+            bad_json = "errors" in response or not response.get("data", {}).get(
+                "attributes", {}
+            ).get("results")
+            if not bad_json:
+                good_json = self._clean_json_recursively(response)
+                if good_json:
+                    result_object = {"integration_id": iid, "result_data": good_json}
+                    action_result.add_data(result_object)
+                    self.save_progress("{0}".format(result_object))
+        # action_result.add_data(polarityRes)
+
+        summary = action_result.update_summary({})
+        summary["IIDs"] = len(action_result.get_data())
+        return action_result.set_status(phantom.APP_SUCCESS)
+
+    def handle_action(self, param):
+        ret_val = phantom.APP_SUCCESS
+        action_id = self.get_action_identifier()
+
+        self.debug_print("action_id", self.get_action_identifier())
+
+        if action_id == "search":
+            ret_val = self._handle_search(param)
+
+        if action_id == "test_connectivity":
+            ret_val = self._handle_test_connectivity(param)
+
+        return ret_val
+
+    def initialize(self):
+        self._state = self.load_state()
+        config = self.get_config()
+
         self._api_key = config.get("api_key")
-        self._verify = config.get("verify_server_cert", False)
+        self._base_url = config.get("base_url")
 
         return phantom.APP_SUCCESS
 
-    def handle_action(self, param):
-        """
-        Dispatcher for actions.
-        """
-        self.debug_print("action_id ", self.get_action_identifier())
+    def finalize(self):
+        self.save_state(self._state)
+        return phantom.APP_SUCCESS
 
-        action_mapping = {
-            "test_connectivity": self._handle_test_connectivity,
-            # Add more action handlers here
-        }
 
-        action = self.get_action_identifier()
-        action_execution_status = phantom.APP_SUCCESS
+def main():
+    import argparse
 
-        if action in action_mapping:
-            action_function = action_mapping[action]
-            action_execution_status = action_function(param)
+    argparser = argparse.ArgumentParser()
 
-        return action_execution_status
+    argparser.add_argument("input_test_json", help="Input Test JSON file")
+    argparser.add_argument("-u", "--username", help="username", required=False)
+    argparser.add_argument("-p", "--password", help="password", required=False)
+
+    args = argparser.parse_args()
+    session_id = None
+
+    username = args.username
+    password = args.password
+
+    if username is not None and password is None:
+        import getpass
+
+        password = getpass.getpass("Password: ")
+
+    if username and password:
+        try:
+            login_url = PolarityappConnector._get_phantom_base_url() + "/login"
+
+            print("Accessing the Login page")
+            r = requests.get(login_url, verify=True)
+            csrftoken = r.cookies["csrftoken"]
+
+            data = dict()
+            data["username"] = username
+            data["password"] = password
+            data["csrfmiddlewaretoken"] = csrftoken
+
+            headers = dict()
+            headers["Cookie"] = "csrftoken=" + csrftoken
+            headers["Referer"] = login_url
+
+            print("Logging into Platform to get the session id")
+            r2 = requests.post(login_url, verify=True, data=data, headers=headers)
+            session_id = r2.cookies["sessionid"]
+        except Exception as e:
+            print("Unable to get session id from the platform. Error: " + str(e))
+            exit(1)
+
+    with open(args.input_test_json) as f:
+        in_json = f.read()
+        in_json = json.loads(in_json)
+        print(json.dumps(in_json, indent=4))
+
+        connector = PolarityappConnector()
+        connector.print_progress_message = True
+
+        if session_id is not None:
+            in_json["user_session_token"] = session_id
+            connector._set_csrf_info(csrftoken, headers["Referer"])
+
+        ret_val = connector._handle_action(json.dumps(in_json))
+        print(json.dumps(json.loads(ret_val), indent=4))
+
+    exit(0)
 
 
 if __name__ == "__main__":
-    import sys
-
-    import pudb
-
-    pudb.set_trace()
-
-    connector = PolarityappConnector()
-    connector.print_progress_message = True
-
-    sys.exit(0)
+    main()

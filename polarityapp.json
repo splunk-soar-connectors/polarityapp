@@ -1,51 +1,147 @@
 {
-    "appid": "ffffffff-ffff-4fff-afff-ffffffffffff",
-    "name": "Example App Name",
-    "description": "Brief description of the app",
+    "appid": "8500b687-74d3-475a-b6b9-725d425c3284",
+    "name": "PolarityApp",
+    "description": "Polarity App Connector",
     "type": "information",
-    "product_vendor": "Vendor Name",
-    "logo": "logo.svg",
-    "logo_dark": "logo_dark.svg",
-    "product_name": "Product Name",
+    "product_vendor": "ThreatConnect",
+    "logo": "polarityapp.png",
+    "logo_dark": "polarityapp_dark.png",
+    "product_name": "PolarityApp",
+    "python_version": "3.13",
     "product_version_regex": ".*",
     "publisher": "Splunk",
-    "license": "Copyright (c) 2025 Splunk Inc.",
-    "app_version": "1.0.1",
-    "latest_tested_versions": [
-        "Version X.Y.Z, Month Year"
+    "contributors":
+    [
+        {
+            "name": "Ajat Shatru"
+        }
     ],
-    "utctime_updated": "2025-08-01T20:30:47.300351Z",
+    "license": "Copyright (c) Splunk, 2025",
+    "app_version": "1.2.0",
+    "utctime_updated": "2025-10-21T13:03:54.211677Z",
     "package_name": "phantom_polarityapp",
     "main_module": "polarityapp_connector.py",
-    "app_config_render": "default",
-    "min_phantom_version": "6.3.0",
-    "python_version": "3.9, 3.13",
-    "fips_compliant": true,
+    "min_phantom_version": "7.0.0.197",
     "app_wizard_version": "1.0.0",
-    "configuration": {
-        "host": {
+    "configuration":
+    {
+        "base_url":
+        {
+            "description": "url",
             "data_type": "string",
+            "required": true,
+            "value_list":
+            [],
+            "default": "",
             "order": 0,
-            "description": "Example Hostname or IP address",
-            "required": true
+            "name": "base_url",
+            "id": 0
         },
-        "api_key": {
-            "data_type": "string",
+        "api_key":
+        {
+            "description": "key",
+            "data_type": "password",
+            "required": true,
             "order": 1,
-            "description": "Example API Key for authentication",
-            "required": true
+            "name": "api_key",
+            "id": 1
         }
     },
-    "actions": [
+    "actions":
+    [
         {
             "action": "test connectivity",
             "identifier": "test_connectivity",
-            "description": "Validate the asset configuration for connectivity",
+            "description": "Validate the asset configuration for connectivity using supplied configuration",
+            "verbose": "",
             "type": "test",
             "read_only": true,
-            "parameters": {},
-            "output": [],
+            "parameters":
+            {},
+            "output":
+            [],
+            "versions": "EQ(*)"
+        },
+        {
+            "action": "search",
+            "identifier": "search",
+            "description": "polarity search action",
+            "verbose": "",
+            "type": "investigate",
+            "read_only": true,
+            "parameters":
+            {
+                "text":
+                {
+                    "description": "text for search",
+                    "data_type": "string",
+                    "required": true,
+                    "primary": true,
+                    "contains":
+                    [
+                        "*"
+                    ],
+                    "value_list":
+                    [],
+                    "default": "",
+                    "order": 0,
+                    "name": "text"
+                }
+            },
+            "output":
+            [
+                {
+                    "data_path": "action_result.parameter.text",
+                    "data_type": "string",
+                    "contains":
+                    [
+                        "*"
+                    ],
+                    "column_name": "text",
+                    "column_order": 0
+                },
+                {
+                    "data_path": "action_result.status",
+                    "data_type": "string",
+                    "column_name": "status",
+                    "column_order": 1
+                },
+                {
+                    "data_path": "action_result.message",
+                    "data_type": "string"
+                },
+                {
+                    "data_path": "summary.total_objects",
+                    "data_type": "numeric"
+                },
+                {
+                    "data_path": "summary.total_objects_successful",
+                    "data_type": "numeric"
+                },
+                {
+                    "data_path": "action_result.data.*.integration_id",
+                    "data_type": "string",
+                    "column_name": "integration",
+                    "column_order": 2
+                },
+                {
+                    "data_path": "action_result.data.*.result_data",
+                    "data_type": "object"
+                }
+            ],
+            "render":
+            {
+                "type": "table"
+            },
             "versions": "EQ(*)"
         }
-    ]
+    ],
+    "custom_made": true,
+    "copied_from_id": 677,
+    "copied_from_version": "1.1.0",
+    "directory": "polarityapp_8500b687-74d3-475a-b6b9-725d425c3284",
+    "version": 1,
+    "appname": "-",
+    "executable": "spawn313",
+    "disabled": false
 }
